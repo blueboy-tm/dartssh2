@@ -4,18 +4,12 @@ import 'dart:typed_data';
 import 'package:dartssh2/src/sftp/sftp_client.dart';
 import 'package:dartssh2/src/utils/stream.dart';
 
-/// The amount of data to send in a single SFTP packet.
-///
-/// From the SFTP spec it's safe to send up to 32KB of data in a single packet.
-/// To strike a balance between capability and performance, we choose 16KB.
-const chunkSize = 16 * 1024;
-
-/// The maximum amount of data that can be sent to the remote host without
-/// receiving an acknowledgement.
-const maxBytesOnTheWire = chunkSize * 64;
-
 /// Holds the state of a streaming write operation from [stream] to [file].
 class SftpFileWriter with DoneFuture {
+  late final int _chunkSize;
+
+  late final int _maxBytesOnTheWire;
+
   /// The remote file to write to.
   final SftpFile file;
 
@@ -30,9 +24,25 @@ class SftpFileWriter with DoneFuture {
 
   /// Creates a new [SftpFileWriter]. The upload process is started immediately
   /// after construction.
-  SftpFileWriter(this.file, this.stream, this.offset, this.onProgress) {
+  SftpFileWriter(
+    this.file,
+    this.stream,
+    this.offset,
+    this.onProgress,
+    int? chunkSize,
+  ) {
+    /// The amount of data to send in a single SFTP packet.
+    ///
+    /// From the SFTP spec it's safe to send up to 32KB of data in a single packet.
+    /// To strike a balance between capability and performance, we choose 16KB.
+    _chunkSize = chunkSize ?? 16 * 1024;
+
+    /// The maximum amount of data that can be sent to the remote host without
+    /// receiving an acknowledgement.
+    _maxBytesOnTheWire = _chunkSize * 64;
+
     _subscription =
-        stream.transform(MaxChunkSize(chunkSize)).listen(_handleLocalData);
+        stream.transform(MaxChunkSize(_chunkSize)).listen(_handleLocalData);
 
     _subscription.onDone(_handleLocalDone);
   }
@@ -91,7 +101,7 @@ class SftpFileWriter with DoneFuture {
   }
 
   Future<void> _handleLocalData(Uint8List chunk) async {
-    if (_bytesOnTheWire >= maxBytesOnTheWire) {
+    if (_bytesOnTheWire >= _maxBytesOnTheWire) {
       _subscription.pause();
     } else {
       _subscription.resume();
@@ -104,7 +114,7 @@ class SftpFileWriter with DoneFuture {
     _bytesAcked += chunk.length;
     onProgress?.call(_bytesAcked);
 
-    if (_bytesOnTheWire < maxBytesOnTheWire) {
+    if (_bytesOnTheWire < _maxBytesOnTheWire) {
       _subscription.resume();
     }
 
